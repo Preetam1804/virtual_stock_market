@@ -57,6 +57,14 @@
   /* ------------------------------------------------------------------ */
   /* API                                                                 */
   /* ------------------------------------------------------------------ */
+  /** Called when the server no longer recognises our session. */
+  function sessionExpired() {
+    if (state.sessionLost) return;
+    state.sessionLost = true;
+    toast('Session expired', 'Reloading to sign you back in…', 'info');
+    setTimeout(() => location.reload(), 1400);
+  }
+
   async function api(path, options = {}) {
     const res = await fetch(`/api${path}`, {
       credentials: 'same-origin',
@@ -64,6 +72,7 @@
       ...options
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && !path.startsWith('/auth/')) sessionExpired();
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
   }

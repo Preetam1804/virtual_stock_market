@@ -10,11 +10,33 @@
  * client keeps working exactly as before.
  */
 
+const path = require('path');
 const crypto = require('crypto');
+const config = require('../config');
 const store = require('./store');
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
-const sessions = new Map(); // token -> { username, expiresAt }
+
+/* Sessions survive a server restart. Without this, every restart silently
+   signed everyone out: the live price stream kept the dashboard looking
+   healthy while every authenticated action started returning 401. */
+const SESSION_FILE = path.join(config.DATA_DIR, 'sessions.json');
+
+function loadSessions() {
+  const rows = store.readJson(SESSION_FILE, []);
+  const now = Date.now();
+  const valid = [];
+  for (const [token, session] of Array.isArray(rows) ? rows : []) {
+    if (session && Number(session.expiresAt) > now) valid.push([token, session]);
+  }
+  return valid;
+}
+
+function persistSessions() {
+  store.writeJson(SESSION_FILE, [...sessions]);
+}
+
+const sessions = new Map(loadSessions()); // token -> { username, expiresAt }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
@@ -59,11 +81,13 @@ function registerCredentials(username, password) {
 function createSession(username) {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, { username, expiresAt: Date.now() + SESSION_TTL_MS });
+  persistSessions();
   return token;
 }
 
 function destroySession(token) {
-  if (token) sessions.delete(token);
+  if (!token) return;
+  if (sessions.delete(token)) persistSessions();
 }
 
 function userFromToken(token) {
@@ -78,9 +102,14 @@ function userFromToken(token) {
 
 setInterval(() => {
   const now = Date.now();
+  let pruned = false;
   for (const [token, session] of sessions) {
-    if (session.expiresAt < now) sessions.delete(token);
+    if (session.expiresAt < now) {
+      sessions.delete(token);
+      pruned = true;
+    }
   }
+  if (pruned) persistSessions();
 }, 60 * 60 * 1000).unref();
 
 /* ------------------------------------------------------------------ */

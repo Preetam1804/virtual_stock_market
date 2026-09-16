@@ -137,7 +137,11 @@ This is a simulator, but it does handle credentials, so:
   through the browser. Delete `data/auth.json` and the terminal client works as
   before.
 - Sessions are random 256-bit tokens in httpOnly, SameSite=Lax cookies, expiring
-  after 12 hours.
+  after 12 hours. They are persisted to `data/sessions.json` — an earlier version
+  kept them in memory only, so every server restart silently signed everyone out
+  while the price stream kept the dashboard looking healthy, and every buy came
+  back `401`. If you ever see `You need to sign in to do that.` on a page that
+  clearly is signed in, reload once.
 - All input is validated server-side; file writes go through a temp file and rename.
 - Passwords still live in plaintext in `users.txt` for C interop. If you deploy this
   anywhere real, drop the C client and store hashes in the users file.
