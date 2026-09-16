@@ -387,8 +387,10 @@
     p.netWorth = Math.round((p.cash + holdings) * 100) / 100;
     p.dayChange = Math.round(day * 100) / 100;
     p.dayChangePct = p.netWorth - day ? Math.round((day / (p.netWorth - day)) * 10000) / 100 : 0;
-    p.unrealised = p.invested ? Math.round((holdings - p.invested) * 100) / 100 : 0;
-    p.unrealisedPct = p.invested ? Math.round(((holdings - p.invested) / p.invested) * 10000) / 100 : 0;
+    const priced = p.positions.filter((pos) => pos.costBasis != null);
+    p.invested = Math.round(priced.reduce((s, pos) => s + pos.costBasis, 0) * 100) / 100;
+    p.unrealised = priced.length ? Math.round(priced.reduce((s, pos) => s + pos.unrealised, 0) * 100) / 100 : null;
+    p.unrealisedPct = p.unrealised !== null && p.invested ? Math.round((p.unrealised / p.invested) * 10000) / 100 : null;
     p.allocation = p.positions.map((pos) => ({
       symbol: pos.symbol,
       color: pos.color,
@@ -442,18 +444,27 @@
     setValue($('#networth-value'), p.netWorth, money, true);
     setValue($('#cash-value'), p.cash, money);
     setValue($('#holdings-value'), p.holdingsValue, money);
-    setValue($('#pl-value'), p.unrealised, (n) => signed(n, (x) => nf.format(Math.round(x))));
+
+    // P/L is unknown for holdings opened in the C client (no purchase record).
+    const plEl = $('#pl-value');
+    if (p.unrealised == null) {
+      plEl.textContent = '—';
+      plEl.classList.remove('up', 'down');
+      plEl.dataset.value = '';
+    } else {
+      setValue(plEl, p.unrealised, (n) => signed(n, (x) => nf.format(Math.round(x))));
+    }
 
     const delta = $('#networth-delta');
     delta.textContent = `${pct(p.dayChangePct)} today`;
     delta.className = pillClass(p.dayChangePct);
 
-    // Toggle rather than reassign, so an in-flight flash animation survives.
-    $('#pl-value').classList.toggle('up', p.unrealised > 0);
-    $('#pl-value').classList.toggle('down', p.unrealised < 0);
-    $('#pl-caption').textContent = p.invested
-      ? `${pct(p.unrealisedPct)} on ${money(p.invested)} invested`
-      : 'Buy something to start tracking';
+    $('#pl-caption').textContent =
+      p.unrealised == null
+        ? p.positions.length
+          ? 'No purchase price on file for these holdings'
+          : 'Buy something to start tracking'
+        : `${pct(p.unrealisedPct)} on ${money(p.invested)} invested`;
 
     $('#holdings-caption').textContent = p.positions.length
       ? `${p.positions.length} position${p.positions.length > 1 ? 's' : ''} · ${money(p.dayChange)} today`

@@ -67,9 +67,14 @@ function summarize(market, user) {
     .sort((a, b) => b.value - a.value);
 
   const holdingsValue = round2(positions.reduce((sum, p) => sum + p.value, 0));
-  const invested = round2(
-    positions.reduce((sum, p) => sum + (p.costBasis ?? p.value), 0)
-  );
+
+  // Holdings opened in the C client have no recorded purchase price, so P/L is
+  // only computed over positions we actually know the cost of — and is null
+  // (rather than a misleading zero) when there are none.
+  const priced = positions.filter((p) => p.costBasis != null);
+  const invested = round2(priced.reduce((sum, p) => sum + p.costBasis, 0));
+  const unrealised = priced.length ? round2(priced.reduce((sum, p) => sum + p.unrealised, 0)) : null;
+
   const netWorth = round2(cash + holdingsValue);
   const dayChange = round2(positions.reduce((sum, p) => sum + p.dayChange, 0));
   const prevNetWorth = netWorth - dayChange;
@@ -80,8 +85,9 @@ function summarize(market, user) {
     holdingsValue,
     invested,
     netWorth,
-    unrealised: round2(holdingsValue - invested),
-    unrealisedPct: invested ? round2(((holdingsValue - invested) / invested) * 10000) / 100 : 0,
+    unrealised,
+    unrealisedPct: unrealised !== null && invested ? round2((unrealised / invested) * 10000) / 100 : null,
+    hasFullBasis: priced.length === positions.length,
     dayChange,
     dayChangePct: prevNetWorth ? round2((dayChange / prevNetWorth) * 10000) / 100 : 0,
     positions,
