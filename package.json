@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build:c": "gcc -std=c11 -Wall -Wextra -O2 -o virtual_stock_market virtual_stock_market.c"
   },
   "engines": {
     "node": ">=18"

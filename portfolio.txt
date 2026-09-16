@@ -3,3 +3,4 @@ akash -2128718627 APL:276796520,GOGL:1
 rakesh 10000 None
 rahitya 10000 None
 preetam 10000 None
+preetam1804 10000 None

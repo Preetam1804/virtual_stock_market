@@ -1,24 +1,38 @@
+/* Ask glibc for the POSIX declarations (usleep, termios, select) even when
+   compiled with a strict -std=c11 instead of the default gnu* dialect. */
+#ifndef _WIN32
+#define _DEFAULT_SOURCE
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
-#include <conio.h>
 #ifdef _WIN32
+#include <conio.h>
 #include <windows.h>
 #else
 #include <unistd.h>
-#include <termios.h>    
-#include <fcntl.h>  
+#include <termios.h>
+#include <fcntl.h>
 #include <sys/select.h>
 #endif
-#define MAX_TICKS 60
-#define MAX_PRICE 6000
+
+/* Number of listed tickers. */
+#define STOCK_COUNT 5
+/* Money is 64-bit: a 32-bit int overflowed and corrupted real accounts. */
+#define MONEY_FMT "%lld"
+
+/* Widest line we will read out of portfolio.txt. */
+#define USER_FIELD 49
+#define NAME_FIELD 99
+#define HOLDINGS_FIELD 255
 
 typedef struct {
     char username[50];
     char fullname[50];
     char password[50];
-    int balance;
+    long long balance;
 } user;
 
 
@@ -31,22 +45,24 @@ typedef struct
 
 typedef struct {
     char username[100];
-    int balance;
-    char stocks[100];
+    long long balance;
+    char stocks[256];
 } portfolio;
 
 int login_check(char input_username[], char input_password[], user* logged_in_user);
-void sign_up();
+void sign_up(void);
 void show_portfolio(char username[]);
-void buy_stocks(char username[], user* current_user,stocks* stock);
-void buy_stocks(char username[], user* current_user,stocks* stock);
-void update_portfolio(char username[],user* current_user,int quantity,int stock_price,stocks* stock,int stock_select);
+void buy_stocks(char username[], user* current_user, stocks* stock);
+void update_portfolio(char username[], user* current_user, int quantity, long long stock_price, stocks* stock, int stock_select);
 void update_balance(char username[], user* current_user);
 void sell_stocks(char username[], user* current_user, stocks* stock);
 void fix_empty_portfolios(void);
-void show_stock_trend(const char *stock_name); 
+void show_stock_trend(const char *stock_name);
 
-void set_nonblocking(int state);
+int kbhit(void);
+int read_int(const char *prompt);
+void clear_input_buffer(void);
+
 void set_nonblocking(int state) {
 #ifndef _WIN32
     struct termios ttystate;
@@ -64,7 +80,41 @@ void set_nonblocking(int state) {
 #endif
 }
 
-int kbhit() {
+/* conio.h's getch() is Windows-only; this is the portable equivalent. */
+static int getch_portable(void) {
+#ifdef _WIN32
+    return _getch();
+#else
+    struct termios old_state, raw_state;
+    tcgetattr(STDIN_FILENO, &old_state);
+    raw_state = old_state;
+    raw_state.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw_state);
+    int ch = getchar();
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_state);
+    return ch;
+#endif
+}
+
+void clear_input_buffer(void) {
+    int ch;
+    while ((ch = getchar()) != '\n' && ch != EOF) { }
+}
+
+/* Reads a whole number, re-prompting safely instead of spinning forever. */
+int read_int(const char *prompt) {
+    int value;
+    printf("%s", prompt);
+    fflush(stdout);
+    if (scanf("%d", &value) != 1) {
+        clear_input_buffer();
+        return -1;
+    }
+    clear_input_buffer();
+    return value;
+}
+
+int kbhit(void) {
 #ifdef _WIN32
     return _kbhit();
 #else
@@ -177,20 +227,21 @@ void display_real_time_stock_graph_single(stocks* stock, int index) {
 }
 
 
-int main() {
+int main(void) {
     int choice;
     user current_user;
     int logged_in = 0;
     char username[50], password[50];
-    srand(time(NULL)); // Seed random number generator ONCE at program start
+    srand((unsigned)time(NULL)); // Seed random number generator ONCE at program start
+
+    fix_empty_portfolios(); // every account gets a portfolio row, blanks become "None"
 
     while (1) {
-        printf("1.login\n");
+        printf("\n========== VIRTUAL STOCK MARKET ==========\n");
+        printf("1. Login\n");
         printf("2. Sign Up\n");
         printf("3. Exit\n");
-        printf("Enter your choice: ");
-        scanf("%d", &choice);
-        getchar();
+        choice = read_int("Enter your choice: ");
 
         if (choice == 1) {
             int apl=(rand()%600)+1200;
@@ -201,13 +252,17 @@ int main() {
             stocks stock[]={{"APL","Apple Inc.",apl},{"GOGL","Google",gogl},{"TSLA","Tesla",tsla},{"MSFT","Microsoft",msft},{"AMZN","Amazon",amzn}};
 
             printf("Enter username: ");
-            scanf("%49s", username);
-            while(getchar() != '\n'); // Clear input buffer
+            if (scanf("%49s", username) != 1) {
+                clear_input_buffer();
+                continue;
+            }
+            clear_input_buffer();
 
             printf("Enter password: ");
+            fflush(stdout);
             char ch;
             int i=0;
-            while(i < 49 && (ch=getch())!=13 && ch!=10){
+            while(i < 49 && (ch=getch_portable())!=13 && ch!=10 && ch!=EOF){
                 if (ch == 8 && i > 0) { // handle backspace
                     i--;
                     printf("\b \b");
@@ -231,11 +286,9 @@ int main() {
                     printf("3. Sell Stocks\n");
                     printf("4. Deposit Balance\n");
                     printf("5. View Real-Time Stock Graph\n");
-                    printf("6. show stock trend\n");
+                    printf("6. Show Stock Trend\n");
                     printf("7. Logout\n");
-                    printf("Enter your choice: ");
-                    scanf("%d", &user_choice);
-                    getchar();
+                    user_choice = read_int("Enter your choice: ");
                     switch (user_choice) {
                         case 1:
                             show_portfolio(username);
@@ -251,14 +304,11 @@ int main() {
                             break;
                         case 5: {
                             printf("\nSelect stock to view graph:\n");
-                            for (int i = 0; i < 5; i++) {
+                            for (int i = 0; i < STOCK_COUNT; i++) {
                                 printf("%d. %s (%s)\n", i+1, stock[i].name, stock[i].symbol);
                             }
-                            int graph_choice;
-                            printf("Enter choice: ");
-                            scanf("%d", &graph_choice);
-                            getchar();
-                            if (graph_choice >= 1 && graph_choice <= 5) {
+                            int graph_choice = read_int("Enter choice: ");
+                            if (graph_choice >= 1 && graph_choice <= STOCK_COUNT) {
                                 display_real_time_stock_graph_single(stock, graph_choice-1);
                             } else {
                                 printf("Invalid choice.\n");
@@ -267,14 +317,11 @@ int main() {
                         }
                         case 6:
                             printf("Select stock to view trend:\n");
-                            for (int i = 0; i < 5; i++) {
+                            for (int i = 0; i < STOCK_COUNT; i++) {
                                 printf("%d. %s (%s)\n", i+1, stock[i].name, stock[i].symbol);
                             }
-                            int trend_choice;
-                            printf("Enter choice: ");
-                            scanf("%d", &trend_choice);
-                            getchar();
-                            if (trend_choice >= 1 && trend_choice <= 5) {
+                            int trend_choice = read_int("Enter choice: ");
+                            if (trend_choice >= 1 && trend_choice <= STOCK_COUNT) {
                                 show_stock_trend(stock[trend_choice-1].symbol);
                             } else {
                                 printf("Invalid choice.\n");
@@ -303,7 +350,7 @@ int main() {
     return 0;
 }
 
-void sign_up() {
+void sign_up(void) {
     user new_user, temp;
     int exists;
     FILE* fp;
@@ -311,12 +358,15 @@ void sign_up() {
     do {
         exists = 0;
         printf("Enter username: ");
-        scanf("%49s", new_user.username);
-        while(getchar() != '\n'); // Clear input buffer
+        if (scanf("%49s", new_user.username) != 1) {
+            clear_input_buffer();
+            return;
+        }
+        clear_input_buffer();
 
         fp = fopen("users.txt", "r");
         if (fp != NULL) {
-            while (fscanf(fp, "%49s %49s %49s %d", temp.username, temp.fullname, temp.password, &temp.balance) != EOF) {
+            while (fscanf(fp, "%49s %49s %49s " MONEY_FMT, temp.username, temp.fullname, temp.password, &temp.balance) == 4) {
                 if (strcmp(temp.username, new_user.username) == 0) {
                     exists = 1;
                     printf("Username already exists. Try another one.\n");
@@ -328,10 +378,26 @@ void sign_up() {
     } while (exists);
 
     printf("Enter full name: ");
-    scanf(" %49[^\n]", new_user.fullname);
-    printf("Enter password (max 49 characters): ");
-    scanf("%49s", new_user.password);
-    while(getchar() != '\n'); // Clear input buffer
+    if (scanf(" %49[^\n]", new_user.fullname) != 1) {
+        clear_input_buffer();
+        return;
+    }
+    /* users.txt is whitespace-delimited and every reader splits on spaces,
+       so fold them into underscores — the web client does the same. */
+    for (char *c = new_user.fullname; *c != '\0'; c++) {
+        if (*c == ' ' || *c == '\t') *c = '_';
+    }
+
+    printf("Enter password (max 49 characters, no spaces): ");
+    if (scanf("%49s", new_user.password) != 1) {
+        clear_input_buffer();
+        return;
+    }
+    clear_input_buffer();
+    if (new_user.username[0] == '\0' || new_user.password[0] == '\0') {
+        printf("Username and password cannot be empty.\n");
+        return;
+    }
     new_user.balance = 10000;
 
     fp = fopen("users.txt", "a");
@@ -339,7 +405,7 @@ void sign_up() {
         printf("Error opening users file for writing.\n");
         return;
     }
-    fprintf(fp, "%s %s %s %d\n", new_user.username, new_user.fullname, new_user.password, new_user.balance);
+    fprintf(fp, "%s %s %s " MONEY_FMT "\n", new_user.username, new_user.fullname, new_user.password, new_user.balance);
     fclose(fp);
 
     FILE* port = fopen("portfolio.txt", "a");
@@ -348,8 +414,8 @@ void sign_up() {
         return;
     }
     portfolio p = {"", 10000, "None"};
-    strcpy(p.username, new_user.username);
-    fprintf(port, "%s %d %s\n", p.username, p.balance, p.stocks);
+    snprintf(p.username, sizeof(p.username), "%s", new_user.username);
+    fprintf(port, "%s " MONEY_FMT " %s\n", p.username, p.balance, p.stocks);
     fclose(port);
 
     printf("User registered successfully!\n");
@@ -364,7 +430,7 @@ int login_check(char input_username[], char input_password[], user* logged_in_us
         return 0;
     }
 
-    while (fscanf(fp, "%49s %49s %49s %d", temp.username, temp.fullname, temp.password, &temp.balance) != EOF) {
+    while (fscanf(fp, "%49s %49s %49s " MONEY_FMT, temp.username, temp.fullname, temp.password, &temp.balance) == 4) {
         if (strcmp(temp.username, input_username) == 0 && strcmp(temp.password, input_password) == 0) {
             *logged_in_user = temp;
             fclose(fp);
@@ -388,82 +454,56 @@ void show_portfolio(char username[]) {
         return;
     }
 
-    while (fscanf(fp, "%s %d %s", temp.username, &temp.balance, temp.stocks) != EOF) {
+    while (fscanf(fp, "%99s " MONEY_FMT " %255s", temp.username, &temp.balance, temp.stocks) == 3) {
         if (strcmp(temp.username, username) == 0) {
             printf("\n---- Portfolio ----\n\n");
             printf("Username : %s\n", temp.username);
-            printf("Balance  : %d\n", temp.balance);
-            printf("Stocks   : %s\n\n\n", temp.stocks);
+            printf("Balance  : " MONEY_FMT "\n", temp.balance);
+            printf("Stocks   : %s\n\n", temp.stocks);
             found=1;
             break;
         }
     }
 
     if (found==0) {
-        printf("portfolio not found");
+        printf("Portfolio not found.\n");
     }
 
     fclose(fp);
 }
 
-void buy_stocks(char username[], user* current_user,stocks* stock){
-    
-    //stocks stock[]={{"APL","Apple Inc.",apl},{"GOGL","Google",gogl},{"TSLA","Tesla",tsla},{"MSFT","Microsoft",msft},{"AMZN","Amazon",amzn}};
-    printf("\n%-5s %-15s %-15s  %-10s\n","S.No","Symbol","Company","Price");
-    printf("---------------------------------------------\n");
-    for(int i=0;i<5;i++){
-        printf("%-5d %-15s %-15s %-10d\n",i+1,stock[i].symbol,stock[i].name,stock[i].price);
+void buy_stocks(char username[], user* current_user, stocks* stock) {
+    printf("\n%-5s %-15s %-15s %12s\n", "S.No", "Symbol", "Company", "Price");
+    printf("-------------------------------------------------------------\n");
+    for (int i = 0; i < STOCK_COUNT; i++) {
+        printf("%-5d %-15s %-15s %12lld\n", i + 1, stock[i].symbol, stock[i].name, (long long)stock[i].price);
     }
-    printf("\nselect your stock (enter serial number): ");
-    int stock_select;
-    scanf("%d",&stock_select);
-    getchar();
-    int quantity;
-    printf("enter quantity : ");
-    scanf("%d",&quantity);
-    getchar();
-    if(stock_select==1){
-        int stock_price;
-        stock_price=quantity*stock[0].price;
-        printf("\nstock: %s\n",stock[0].symbol);
-        printf("quantity: %d\n",quantity);
-        printf("total price of the order : %d\n",stock_price);
-        update_portfolio(username,current_user,quantity,stock_price,stock,stock_select);
+
+    int stock_select = read_int("\nSelect your stock (enter serial number): ");
+    if (stock_select < 1 || stock_select > STOCK_COUNT) {
+        printf("Invalid stock selection.\n");
+        return;
     }
-    if(stock_select==2){
-        int stock_price;
-        stock_price=quantity*stock[1].price;
-        printf("\nstock: %s\n",stock[1].symbol);
-        printf("quantity: %d\n",quantity);
-        printf("total price of the order : %d\n",stock_price);
-        update_portfolio(username,current_user,quantity,stock_price,stock,stock_select);
+
+    int quantity = read_int("Enter quantity: ");
+    if (quantity <= 0) {
+        printf("Quantity must be greater than zero.\n");
+        return;
     }
-    if(stock_select==3){
-        int stock_price;
-        stock_price=quantity*stock[2].price;
-        printf("\nstock: %s\n",stock[2].symbol);
-        printf("quantity: %d\n",quantity);
-        printf("total price of the order : %d\n",stock_price);
-        update_portfolio(username,current_user,quantity,stock_price,stock,stock_select);
-    }
-    if(stock_select==4){
-        int stock_price;
-        stock_price=quantity*stock[3].price;
-        printf("\nstock: %s\n",stock[3].symbol);
-        printf("quantity: %d\n",quantity);
-        printf("total price of the order : %d\n",stock_price);
-        update_portfolio(username,current_user,quantity,stock_price,stock,stock_select);
-    }
-    if(stock_select==5){
-        int stock_price;
-        stock_price=quantity*stock[4].price;
-        printf("\nstock: %s\n",stock[4].symbol);
-        printf("quantity: %d\n",quantity);
-        printf("total price of the order : %d\n",stock_price);
-        update_portfolio(username,current_user,quantity,stock_price,stock,stock_select);
-    }
+
+    long long stock_price = (long long)quantity * stock[stock_select - 1].price;
+    printf("\nStock      : %s\n", stock[stock_select - 1].symbol);
+    printf("Quantity   : %d\n", quantity);
+    printf("Total cost : " MONEY_FMT "\n", stock_price);
+
+    update_portfolio(username, current_user, quantity, stock_price, stock, stock_select);
 }
-void update_portfolio(char username[], user* current_user, int quantity, int stock_price, stocks* stock, int stock_select) {
+
+void update_portfolio(char username[], user* current_user, int quantity, long long stock_price, stocks* stock, int stock_select) {
+    if (quantity <= 0) {
+        printf("Quantity must be greater than zero.\n");
+        return;
+    }
     if (current_user->balance < stock_price) {
         printf("Insufficient balance.\n");
         return;
@@ -472,13 +512,13 @@ void update_portfolio(char username[], user* current_user, int quantity, int sto
     user temp_user;
     user users[100];
     int user_count = 0;
-    int new_balance = 0;
+    long long new_balance = 0;
     FILE* fp = fopen("users.txt", "r");
     if (fp == NULL) {
         printf("Error opening users file.\n");
         return;
     }
-    while (fscanf(fp, "%s %s %s %d", temp_user.username, temp_user.fullname, temp_user.password, &temp_user.balance) != EOF) {
+    while (fscanf(fp, "%49s %49s %49s " MONEY_FMT, temp_user.username, temp_user.fullname, temp_user.password, &temp_user.balance) == 4) {
         if (strcmp(temp_user.username, username) == 0) {
             temp_user.balance -= stock_price;
             new_balance = temp_user.balance;
@@ -490,7 +530,7 @@ void update_portfolio(char username[], user* current_user, int quantity, int sto
 
     fp = fopen("users.txt", "w");
     for (int i = 0; i < user_count; i++) {
-        fprintf(fp, "%s %s %s %d\n", users[i].username, users[i].fullname, users[i].password, users[i].balance);
+        fprintf(fp, "%s %s %s " MONEY_FMT "\n", users[i].username, users[i].fullname, users[i].password, users[i].balance);
     }
     fclose(fp);
 
@@ -502,72 +542,99 @@ void update_portfolio(char username[], user* current_user, int quantity, int sto
         printf("Error opening portfolio file.\n");
         return;
     }
-    while (fscanf(pf, "%s %d %s", temp_port.username, &temp_port.balance, temp_port.stocks) != EOF) {
+    while (fscanf(pf, "%99s " MONEY_FMT " %255s", temp_port.username, &temp_port.balance, temp_port.stocks) == 3) {
         portfolios[port_count++] = temp_port;
     }
     fclose(pf);
 
+    int row = -1;
     for (int i = 0; i < port_count; i++) {
-        if (strcmp(portfolios[i].username, username) == 0) {
-            portfolios[i].balance = new_balance; 
-            char updated_stocks[200] = "";
-            int found = 0;
-            char* token = strtok(portfolios[i].stocks, ",");
-            while (token != NULL && strcmp(portfolios[i].stocks, "None") != 0) {
-                char sym[50];
-                int quant;
-                sscanf(token, "%[^:]:%d", sym, &quant);
-                if (strcmp(sym, stock[stock_select-1].symbol) == 0) {
+        if (strcmp(portfolios[i].username, username) == 0) { row = i; break; }
+    }
+    if (row == -1 && port_count < 100) {
+        /* Account with no portfolio row yet — create one so the shares land somewhere. */
+        row = port_count++;
+        snprintf(portfolios[row].username, sizeof(portfolios[row].username), "%s", username);
+        portfolios[row].balance = new_balance;
+        snprintf(portfolios[row].stocks, sizeof(portfolios[row].stocks), "None");
+    }
+    if (row == -1) {
+        printf("Portfolio table is full.\n");
+        return;
+    }
+
+    portfolios[row].balance = new_balance;
+
+    char updated_stocks[512] = "";
+    int found = 0;
+    if (strcmp(portfolios[row].stocks, "None") != 0) {
+        char holdings[256];
+        snprintf(holdings, sizeof(holdings), "%s", portfolios[row].stocks);
+        char* token = strtok(holdings, ",");
+        while (token != NULL) {
+            char sym[50];
+            int quant = 0;
+            if (sscanf(token, "%49[^:]:%d", sym, &quant) == 2) {
+                if (strcmp(sym, stock[stock_select - 1].symbol) == 0) {
                     quant += quantity;
                     found = 1;
                 }
-                char entry[50];
-                sprintf(entry, "%s:%d,", sym, quant);
-                strcat(updated_stocks, entry);
-                token = strtok(NULL, ",");
+                char entry[64];
+                snprintf(entry, sizeof(entry), "%s:%d,", sym, quant);
+                if (strlen(updated_stocks) + strlen(entry) < sizeof(updated_stocks)) {
+                    strcat(updated_stocks, entry);
+                }
             }
-            if (!found) {
-                char entry[50];
-                sprintf(entry, "%s:%d,", stock[stock_select-1].symbol, quantity);
-                strcat(updated_stocks, entry);
-            }
-            
-            int len = strlen(updated_stocks);
-            if (len > 0 && updated_stocks[len-1] == ',') updated_stocks[len-1] = '\0';
-            strcpy(portfolios[i].stocks, updated_stocks);
+            token = strtok(NULL, ",");
+        }
+    }
+    if (!found) {
+        char entry[64];
+        snprintf(entry, sizeof(entry), "%s:%d,", stock[stock_select - 1].symbol, quantity);
+        if (strlen(updated_stocks) + strlen(entry) < sizeof(updated_stocks)) {
+            strcat(updated_stocks, entry);
         }
     }
 
+    int len = (int)strlen(updated_stocks);
+    if (len > 0 && updated_stocks[len - 1] == ',') updated_stocks[len - 1] = '\0';
+    snprintf(portfolios[row].stocks, sizeof(portfolios[row].stocks), "%s",
+             len > 0 ? updated_stocks : "None");
+
     pf = fopen("portfolio.txt", "w");
     for (int i = 0; i < port_count; i++) {
-        fprintf(pf, "%s %d %s\n", portfolios[i].username, portfolios[i].balance, portfolios[i].stocks);
+        fprintf(pf, "%s " MONEY_FMT " %s\n", portfolios[i].username, portfolios[i].balance, portfolios[i].stocks);
     }
     fclose(pf);
 
-    printf("order successful!!\n");
+    printf("Order successful!\n");
 }
-void update_balance(char username[], user* current_user) {
-    printf("Enter the amount you want to deposit: ");
-    int dep;
-    scanf("%d", &dep);
 
+void update_balance(char username[], user* current_user) {
+    long long dep = read_int("Enter the amount you want to deposit: ");
+
+    if (dep <= 0) {
+        printf("Deposit must be greater than zero.\n");
+        return;
+    }
     if (dep > 50000) {
         printf("Maximum deposit limit is 50000.\n");
         return;
     }
+
     user users[100];
     user temp_user;
     int user_count = 0;
     FILE* fp = fopen("users.txt", "r");
     if (!fp) {
-        printf("Error opening file.\n");
+        printf("Error opening users file.\n");
         return;
     }
 
-    while (fscanf(fp, "%s %s %s %d", temp_user.username, temp_user.fullname, temp_user.password, &temp_user.balance) != EOF) {
+    while (fscanf(fp, "%49s %49s %49s " MONEY_FMT, temp_user.username, temp_user.fullname, temp_user.password, &temp_user.balance) == 4) {
         if (strcmp(temp_user.username, username) == 0) {
-            temp_user.balance += dep;    
-            *current_user = temp_user;      
+            temp_user.balance += dep;
+            *current_user = temp_user;
         }
         users[user_count++] = temp_user;
     }
@@ -575,7 +642,7 @@ void update_balance(char username[], user* current_user) {
     fclose(fp);
     fp = fopen("users.txt", "w");
     for (int i = 0; i < user_count; i++) {
-        fprintf(fp, "%s %s %s %d\n", users[i].username, users[i].fullname, users[i].password, users[i].balance);
+        fprintf(fp, "%s %s %s " MONEY_FMT "\n", users[i].username, users[i].fullname, users[i].password, users[i].balance);
     }
     fclose(fp);
 
@@ -587,19 +654,21 @@ void update_balance(char username[], user* current_user) {
         printf("Error opening portfolio file.\n");
         return;
     }
-    while (fscanf(port, "%s %d %s", temp_port.username, &temp_port.balance, temp_port.stocks) != EOF) {
+    while (fscanf(port, "%99s " MONEY_FMT " %255s", temp_port.username, &temp_port.balance, temp_port.stocks) == 3) {
         if (strcmp(temp_port.username, username) == 0) {
             temp_port.balance += dep;
         }
         temp_port_struct[port_count++] = temp_port;
     }
     fclose(port);
+
     port = fopen("portfolio.txt", "w");
     for (int i = 0; i < port_count; i++) {
-        fprintf(port, "%s %d %s\n", temp_port_struct[i].username, temp_port_struct[i].balance, temp_port_struct[i].stocks);
+        fprintf(port, "%s " MONEY_FMT " %s\n", temp_port_struct[i].username, temp_port_struct[i].balance, temp_port_struct[i].stocks);
     }
     fclose(port);
-    //fclose(port);
+
+    printf("Deposited " MONEY_FMT ". New balance: " MONEY_FMT "\n", dep, current_user->balance);
 }
 
 void sell_stocks(char username[], user* current_user, stocks* stock) {
@@ -612,37 +681,52 @@ void sell_stocks(char username[], user* current_user, stocks* stock) {
     user temp_user;
     user users[100];
     int user_count = 0;
-    int sale_amount = 0;
+    long long sale_amount = 0;
+    char sold_symbol[50] = "";
 
     if (pf == NULL) {
         printf("Error opening portfolio file.\n");
         return;
     }
-    while (fscanf(pf, "%s %d %s", temp_port.username, &temp_port.balance, temp_port.stocks) != EOF) {
+    while (fscanf(pf, "%99s " MONEY_FMT " %255s", temp_port.username, &temp_port.balance, temp_port.stocks) == 3) {
         if (strcmp(temp_port.username, username) == 0) {
             found = 1;
-            char stocks_copy[200];
-            strcpy(stocks_copy, temp_port.stocks);
-            char* token = strtok(stocks_copy, ",");
             printf("Available stocks:\n");
+            if (strcmp(temp_port.stocks, "None") == 0) {
+                printf("  (none)\n");
+                fclose(pf);
+                return;
+            }
+            char listed[256];
+            snprintf(listed, sizeof(listed), "%s", temp_port.stocks);
+            char* token = strtok(listed, ",");
             while (token != NULL) {
                 char sym[50];
-                int quant;
-                sscanf(token, "%[^:]:%d", sym, &quant);
-                printf("%s: %d\n", sym, quant);
+                int quant = 0;
+                if (sscanf(token, "%49[^:]:%d", sym, &quant) == 2) {
+                    printf("  %s: %d\n", sym, quant);
+                }
                 token = strtok(NULL, ",");
             }
+
             printf("Enter the stock symbol you want to sell: ");
             char stock_symbol[50];
-            scanf("%s", stock_symbol);
-            printf("Enter the quantity you want to sell: ");
-            scanf("%d", &quantity);
-            char updated_stocks[200] = "";
-            strcpy(stocks_copy, temp_port.stocks);
-            token = strtok(stocks_copy, ",");
-            int stock_found = 0;
+            if (scanf("%49s", stock_symbol) != 1) {
+                clear_input_buffer();
+                fclose(pf);
+                return;
+            }
+            clear_input_buffer();
+
+            quantity = read_int("Enter the quantity you want to sell: ");
+            if (quantity <= 0) {
+                printf("Quantity must be greater than zero.\n");
+                fclose(pf);
+                return;
+            }
+
             int stock_index = -1;
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < STOCK_COUNT; i++) {
                 if (strcmp(stock[i].symbol, stock_symbol) == 0) {
                     stock_index = i;
                     break;
@@ -653,27 +737,39 @@ void sell_stocks(char username[], user* current_user, stocks* stock) {
                 fclose(pf);
                 return;
             }
+            snprintf(sold_symbol, sizeof(sold_symbol), "%s", stock_symbol);
+
+            char updated_stocks[512] = "";
+            int stock_found = 0;
+            char stocks_copy[256];
+            snprintf(stocks_copy, sizeof(stocks_copy), "%s", temp_port.stocks);
+            token = strtok(stocks_copy, ",");
             while (token != NULL) {
                 char sym[50];
-                int quant;
-                sscanf(token, "%[^:]:%d", sym, &quant);
-                if (strcmp(sym, stock_symbol) == 0) {
-                    stock_found = 1;
-                    if (quant < quantity) {
-                        printf("Not enough stocks to sell.\n");
-                        fclose(pf);
-                        return;
+                int quant = 0;
+                if (sscanf(token, "%49[^:]:%d", sym, &quant) == 2) {
+                    if (strcmp(sym, stock_symbol) == 0) {
+                        stock_found = 1;
+                        if (quant < quantity) {
+                            printf("Not enough stocks to sell.\n");
+                            fclose(pf);
+                            return;
+                        }
+                        quant -= quantity;
+                        if (quant > 0) {
+                            char entry[64];
+                            snprintf(entry, sizeof(entry), "%s:%d,", sym, quant);
+                            if (strlen(updated_stocks) + strlen(entry) < sizeof(updated_stocks)) {
+                                strcat(updated_stocks, entry);
+                            }
+                        }
+                    } else {
+                        char entry[64];
+                        snprintf(entry, sizeof(entry), "%s:%d,", sym, quant);
+                        if (strlen(updated_stocks) + strlen(entry) < sizeof(updated_stocks)) {
+                            strcat(updated_stocks, entry);
+                        }
                     }
-                    quant -= quantity;
-                    if (quant > 0) {
-                        char entry[50];
-                        sprintf(entry, "%s:%d,", sym, quant);
-                        strcat(updated_stocks, entry);
-                    }
-                } else {
-                    char entry[50];
-                    sprintf(entry, "%s:%d,", sym, quant);
-                    strcat(updated_stocks, entry);
                 }
                 token = strtok(NULL, ",");
             }
@@ -682,24 +778,28 @@ void sell_stocks(char username[], user* current_user, stocks* stock) {
                 fclose(pf);
                 return;
             }
-            int len = strlen(updated_stocks);
+
+            int len = (int)strlen(updated_stocks);
             if (len > 0 && updated_stocks[len - 1] == ',') updated_stocks[len - 1] = '\0';
-            // If no stocks left, set to "None"
-            if (strlen(updated_stocks) == 0) {
-                strcpy(temp_port.stocks, "None");
-            } else {
-                strcpy(temp_port.stocks, updated_stocks);
-            }
-            sale_amount = quantity * stock[stock_index].price;
+            snprintf(temp_port.stocks, sizeof(temp_port.stocks), "%s",
+                     len > 0 ? updated_stocks : "None");
+
+            sale_amount = (long long)quantity * stock[stock_index].price;
             temp_port.balance += sale_amount;
             temp_port_struct[port_count++] = temp_port;
-            break; // Exit the loop after processing the sale for the user
+            break;
         } else {
             temp_port_struct[port_count++] = temp_port;
         }
     }
     fclose(pf);
-    int new_balance = 0;
+
+    if (!found) {
+        printf("Portfolio not found.\n");
+        return;
+    }
+
+    long long new_balance = 0;
     for (int i = 0; i < port_count; i++) {
         if (strcmp(temp_port_struct[i].username, username) == 0) {
             new_balance = temp_port_struct[i].balance;
@@ -709,17 +809,16 @@ void sell_stocks(char username[], user* current_user, stocks* stock) {
 
     pf = fopen("portfolio.txt", "w");
     for (int i = 0; i < port_count; i++) {
-        fprintf(pf, "%s %d %s\n", temp_port_struct[i].username, temp_port_struct[i].balance, temp_port_struct[i].stocks);
+        fprintf(pf, "%s " MONEY_FMT " %s\n", temp_port_struct[i].username, temp_port_struct[i].balance, temp_port_struct[i].stocks);
     }
     fclose(pf);
 
     FILE* uf = fopen("users.txt", "r");
-
     if (uf == NULL) {
         printf("Error opening users file.\n");
         return;
     }
-    while (fscanf(uf, "%s %s %s %d", temp_user.username, temp_user.fullname, temp_user.password, &temp_user.balance) != EOF) {
+    while (fscanf(uf, "%49s %49s %49s " MONEY_FMT, temp_user.username, temp_user.fullname, temp_user.password, &temp_user.balance) == 4) {
         if (strcmp(temp_user.username, username) == 0) {
             temp_user.balance = new_balance; // sync balance
             *current_user = temp_user;
@@ -727,14 +826,17 @@ void sell_stocks(char username[], user* current_user, stocks* stock) {
         users[user_count++] = temp_user;
     }
     fclose(uf);
+
     uf = fopen("users.txt", "w");
     for (int i = 0; i < user_count; i++) {
-        fprintf(uf, "%s %s %s %d\n", users[i].username, users[i].fullname, users[i].password, users[i].balance);
+        fprintf(uf, "%s %s %s " MONEY_FMT "\n", users[i].username, users[i].fullname, users[i].password, users[i].balance);
     }
     fclose(uf);
+
+    printf("Sold %d x %s for " MONEY_FMT ".\n", quantity, sold_symbol, sale_amount);
 }
 
-void fix_empty_portfolios() {
+void fix_empty_portfolios(void) {
     FILE* pf = fopen("portfolio.txt", "r");
     portfolio temp_port;
     portfolio temp_port_struct[100];
@@ -743,22 +845,24 @@ void fix_empty_portfolios() {
         printf("Error opening portfolio file.\n");
         return;
     }
-    while (fscanf(pf, "%s %d %[^\n]", temp_port.username, &temp_port.balance, temp_port.stocks) != EOF) {
-        if (strlen(temp_port.stocks) == 0 || temp_port.stocks[0] == '\n' || temp_port.stocks[0] == '\0') {
-            strcpy(temp_port.stocks, "None");
+    while (fscanf(pf, "%99s " MONEY_FMT " %255[^\n]", temp_port.username, &temp_port.balance, temp_port.stocks) == 3) {
+        /* Trim a trailing CR so files saved on Windows parse the same way. */
+        size_t len = strlen(temp_port.stocks);
+        while (len > 0 && (temp_port.stocks[len - 1] == '\r' || temp_port.stocks[len - 1] == ' ')) {
+            temp_port.stocks[--len] = '\0';
+        }
+        if (len == 0) {
+            snprintf(temp_port.stocks, sizeof(temp_port.stocks), "None");
         }
         temp_port_struct[port_count++] = temp_port;
     }
     fclose(pf);
     pf = fopen("portfolio.txt", "w");
     for (int i = 0; i < port_count; i++) {
-        fprintf(pf, "%s %d %s\n", temp_port_struct[i].username, temp_port_struct[i].balance, temp_port_struct[i].stocks);
+        fprintf(pf, "%s " MONEY_FMT " %s\n", temp_port_struct[i].username, temp_port_struct[i].balance, temp_port_struct[i].stocks);
     }
     fclose(pf);
 }
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #define MAX_DAYS 100
 #define MAX_LINE 100

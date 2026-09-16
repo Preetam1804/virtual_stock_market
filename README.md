@@ -144,17 +144,35 @@ This is a simulator, but it does handle credentials, so:
 
 ## The C client
 
-`virtual_stock_market.c` is untouched and still builds on Windows (`conio.h`) —
-run it from the repo root so it finds the data files:
+The original terminal client, now cross-platform. Run it from the repo root so it
+finds the data files:
 
 ```
-> gcc virtual_stock_market.c -o virtual_stock_market
-> virtual_stock_market
+$ make            # or: npm run build:c
+$ ./virtual_stock_market
 ```
 
 It offers login, sign-up, portfolio, buy, sell, deposit, an ASCII real-time graph
-and an ASCII trend chart. Its `fix_empty_portfolios()` normalisation is now also
-performed by the server on boot, so both clients agree on the file layout.
+and an ASCII trend chart.
+
+It used to be Windows-only and would not compile anywhere else. It now builds
+warning-free with `gcc -std=c11 -Wall -Wextra` on Linux and macOS and still
+builds on Windows, and several latent crashes became impossible:
+
+| Was                                                  | Now                                                   |
+| ---------------------------------------------------- | ----------------------------------------------------- |
+| `#include <conio.h>` / `getch()` — Windows only      | portable `getch_portable()` via `termios`, `conio.h` kept on Windows |
+| Money stored in 32-bit `int`                         | 64-bit `long long` — this overflow is what corrupted the `akash` account |
+| `strcpy` of a 200-byte buffer into a 100-byte field  | bounded `snprintf`, length-checked appends             |
+| unbounded `scanf("%s")` / `fscanf("%s")`             | every field has an explicit width                      |
+| non-numeric menu input → infinite loop               | `read_int()` returns −1 and the menu reprompts         |
+| invalid stock number → silent no-op                  | validated, with a message                              |
+| negative deposit accepted (free money)               | rejected, and the 50,000 cap kept                      |
+| buying with no portfolio row charged cash, gave no shares | the row is created                                |
+| `fix_empty_portfolios()` defined but never called    | runs on startup                                        |
+
+Both clients agree on the file layout, and the server performs the same
+reconciliation on boot.
 
 ## Known data quirk
 
