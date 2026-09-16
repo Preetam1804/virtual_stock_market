@@ -1,0 +1,17 @@
+{
+  "name": "virtual-stock-market",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Virtual stock market simulator: a real-time, animated trading dashboard on the web plus the original C terminal client, sharing the same data files.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

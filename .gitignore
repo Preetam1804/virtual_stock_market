@@ -1,2 +1,9 @@
 .ideavo/project
 *.log
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Web-only runtime state (regenerated automatically)
+data/
